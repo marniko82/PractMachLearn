@@ -1,0 +1,151 @@
+---
+title: "Prediction of physical activity using machine learning"
+author: "Marko Nikolic"
+date: "Friday, October 23, 2015"
+output: html_document
+---
+
+# Introduction
+
+This assignment attempts to predict the type of phisical activity using machine learning. Namely, we will try to predict if a certain type of workout (Unilateral Dumbbell Biceps Curl) is done in an appropriate manner using data collected from a series of human subjects who have performed the exercise while wearing belt, glove, arm-band and dumbbell sensors. 
+
+# Dataset 
+
+Dataset was provided on http://groupware.les.inf.puc-rio.br/har. The explanations and the paper produced after collecting the data by Velloso et al are also available on the web site. This dataset is licensed under the Creative Commons license (CC BY-SA). 
+
+The dataset consists of 19622 observations of 160 variables. The data has been collected from six individuals as a time series. The dataset contains acceleration, gyroscope and magnetometer readings along the x, y and z axis for all four sensor bearing devices (belt, glove, arm-band and dumbbell). In addition, roll, pitch and yaw on the Euler angles have been calculated as well as their mean, variance, standard deviation, max, min, amplitude, kurtosis and skewness. 
+
+The dependent variable, named classe, is a factor variable with 5 levels corresponding to five different ways the exercise can be performed: 
+
+* exactly according to the specification (Class A), 
+* throwing the elbows to the front (Class B), 
+* lifting the dumbbell only halfway (Class C), 
+* lowering the dumbbell only halfway (Class D) and 
+* throwing the hips to the front (Class E)
+
+A separate dataset of 20 observations was provided for evaluation purposes. 
+
+# Dataset manipulation
+
+The first step in building our prediction model is the cleanup of the dataset. We decided to extract the raw acceleration, gyroscope and magnetometer readings along the x, y and z axis for all four sensor bearing devices and discard all the remaining features, such as individual name or time readings. We have ended up with the dataset named train_short which consists of 1 debendent variable (classe) and 36 independent variables. There are 19662 observations in the new dataset.
+
+Then, in order to obtain the most unbiased estimate of the OOB error, we have split the trainshort dataset into a new train dataset (named tts) and a new test set (named oobtest) with the 80/20 ratio in favor of the train dataset. 
+
+It has been assumed the source data is in the working directory.  
+
+```{r echo=FALSE, message=FALSE, warning=FALSE} 
+setwd("C:/Users/Nikolici/Desktop/PractMachLearn/project")
+```
+```{r message=FALSE, warning=FALSE} 
+### Preliminary actions
+library(ggplot2); library(caret)
+set.seed(696969)
+train <- read.csv("./pml-training.csv")
+test <- read.csv("./pml-testing.csv")
+
+### Extraction of wanted variables
+
+train_short <- cbind(train[,which(grepl("_x",names(train)))],
+                     train[,which(grepl("_y",names(train))&!grepl("_ya",names(train)))  ],
+                     train[,which(grepl("_z",names(train)))],
+                     classe=train[,160])
+
+### Split into new train and test set
+
+inTrain = createDataPartition(train_short$classe, p=0.80, list=FALSE)
+tts = train_short[inTrain,]
+oob_test = train_short[-inTrain,]
+inTrain = createDataPartition(train_short$classe, p=0.01, list=FALSE)
+tts <- train_short[inTrain,]
+
+all_oob <- matrix(data = NA, nrow = 3, ncol = 1, byrow = TRUE)
+```
+
+# Model selection
+
+We have selected three machine learning algorithms as our initial models. 
+
+We have trained a Random Forest, GBM and SVM methods using the default caret package options, except GBM where we used the following parameters: n.trees = 100, interaction.depth = 1,shrinkage = 0.1. 
+
+All the models were calculated using 5-fold cross validation. 
+
+For each of the models, we have calculated the OOB error using the oobtest dataset which was not used in the initial training. 
+
+```{r eval=FALSE} 
+### Model selection 
+fitControl <- trainControl(method="repeatedcv", number=5, repeats=1, verboseIter=TRUE)
+
+## Random Forest
+set.seed(696969)
+modFitForest <- train(classe~., method="rf",data=tts, trControl=fitControl, verbose=FALSE)
+predict_oob <- predict(modFitForest,newdata=oob_test)
+all_oob[1,1] <- 1-sum(predict_oob==oob_test$classe)/length(predict_oob)
+
+## GBM 
+set.seed(696969)
+gbmGrid <-  expand.grid(n.trees = 100, interaction.depth = 1,shrinkage = 0.1)
+modFitGBM <- train(classe~., method="gbm",data=tts, trControl=fitControl, verbose=FALSE)
+predict_oob <- predict(modFitGBM,newdata=oob_test)
+all_oob[2,1] <- 1-sum(predict_oob==oob_test$classe)/length(predict_oob)
+
+## SVM
+set.seed(696969)
+modFitSVM <- train(classe~., method="svmRadial",data=tts, trControl=fitControl, verbose=FALSE)
+predict_oob <- predict(modFitSVM,newdata=oob_test)
+all_oob[3,1] <- 1-sum(predict_oob==oob_test$classe)/length(predict_oob)
+```
+
+The results are summarized in the following charts: 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE} 
+modFitForest <- readRDS("Initial_RF.rds")
+modFitGBM <- readRDS("Initial_GBM.rds")
+modFitSVM <- readRDS("Initial_SVM.rds")
+all_oob <- read.table("all_oob.Rda")
+```
+
+```{r message=FALSE, warning=FALSE} 
+# collect resamples
+results <- resamples(list(RF=modFitForest, GBM=modFitGBM, SVM=modFitSVM))
+# summarize the distributions
+summary(results)
+# boxplots of results
+bwplot(results)
+# dot plots of results
+dotplot(results)
+
+dimnames(all_oob) <- list(c("RF","GBM","SVM"),c("OOB")) ; all_oob <- data.frame(all_oob)
+qplot(rownames(all_oob),OOB, data=all_oob, xlab="Method", main="Comparison of OOB error")
+```
+
+# Final model
+
+As the Random Forest has resulted in the highest accuracy and smallest OOB error, we decided to choose the Random Forest method as our final method and retrain it on the entire train set.
+
+```{r eval=FALSE} 
+set.seed(696969)
+modFitFinal <- train(classe~., method="rf",data=train_short, trControl=fitControl, verbose=FALSE)
+varImp(modFitFinal)
+```
+
+The most important features appear to be magnetometer readings along the x, y and z axis of the dumbbell. This is an intuitive result as Unilateral Dumbbell Biceps Curl is mostly an arm exercise.   
+
+The OOB estimated by the algorithm is 0.82%. 
+
+# Application to the test set
+
+Finally, we have applied our algorithm to the test set of 20 measurements. The test set was cleaned in the same way as the train set. 
+
+Our final prediction for the 20 test cases is the following: 
+```{r echo=FALSE, message=FALSE, warning=FALSE} 
+modFitFinal <- readRDS("Final.rds")
+```
+
+```{r message=FALSE, warning=FALSE} 
+final_pred <- predict(modFitFinal,newdata=test_short); final_pred
+```
+
+
+
+
+
